@@ -52,11 +52,48 @@ type DidAudit = {
   status: 'match' | 'mismatch' | 'missing' | 'invalid';
 };
 
+type ConversationMap = {
+  room: string;
+  sampledAt: string;
+  sample: {
+    messages: number;
+    firstSeq: number | null;
+    lastSeq: number | null;
+    firstTimestamp: string | null;
+    lastTimestamp: string | null;
+  };
+  participation: {
+    signedMessages: number;
+    unsignedMessages: number;
+    distinctSignedDids: number;
+    oneShotSignedMessageCount: number;
+  };
+  repetition: {
+    distinctTexts: number;
+    repeatedMessageCount: number;
+    repeatedPhrases: Array<{ value: string; count: number }>;
+  };
+  questions: number;
+  terms: Array<{ term: string; count: number }>;
+};
+
 const number = new Intl.NumberFormat('en-US');
+const SITE_DID = 'did:key:z6Mkfpkmwrd1vzKg2WQVSHBPk4CxvSCsKuvs5CTksioU4PJs';
+const SITE_GITHUB = 'https://github.com/0xjorgen';
 
 function percent(value: number | null) {
   if (value === null) return '—';
   return `${Math.round(value * 100)}%`;
+}
+
+function share(part: number, total: number) {
+  return total === 0 ? null : part / total;
+}
+
+function formatTimestamp(value: string | null) {
+  if (!value) return '—';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
 }
 
 function shortDid(value: string) {
@@ -72,7 +109,7 @@ function relativeTime(seconds: number) {
 
 async function request<T>(resource: string, value?: string) {
   const params = new URLSearchParams({ resource });
-  if (value) params.set(resource === 'room' ? 'room' : 'did', value);
+  if (value) params.set(resource === 'did' ? 'did' : 'room', value);
 
   const response = await fetch(`/api/technocore?${params.toString()}`);
   const payload = (await response.json()) as T & { error?: string };
@@ -96,6 +133,9 @@ export default function Home() {
   const [isAuditing, setIsAuditing] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [conversationMap, setConversationMap] = useState<ConversationMap | null>(null);
+  const [conversationError, setConversationError] = useState<string | null>(null);
+  const [isMapping, setIsMapping] = useState(false);
 
   const loadNetwork = useCallback(async () => {
     try {
@@ -114,6 +154,19 @@ export default function Home() {
       setActivityError(null);
     } catch (error) {
       setActivityError(error instanceof Error ? error.message : 'Could not load this room.');
+    }
+  }, []);
+
+  const loadConversationMap = useCallback(async (room: string) => {
+    setIsMapping(true);
+    try {
+      const nextMap = await request<ConversationMap>('conversation', room);
+      setConversationMap(nextMap);
+      setConversationError(null);
+    } catch (error) {
+      setConversationError(error instanceof Error ? error.message : 'Could not map this room.');
+    } finally {
+      setIsMapping(false);
     }
   }, []);
 
@@ -154,16 +207,24 @@ export default function Home() {
     () => activity?.messages.filter((message) => message.from.startsWith('did:key:')).length ?? 0,
     [activity],
   );
+  const largestTermCount = conversationMap?.terms[0]?.count ?? 1;
 
   async function refresh() {
     setIsRefreshing(true);
-    await Promise.all([loadNetwork(), loadActivity(roomName)]);
+    const refreshes = [loadNetwork(), loadActivity(roomName)];
+    if (conversationMap) refreshes.push(loadConversationMap(conversationMap.room));
+    await Promise.all(refreshes);
     setIsRefreshing(false);
   }
 
   async function submitRoom(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     await loadActivity(roomName);
+  }
+
+  async function submitConversationMap(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    await loadConversationMap(roomName);
   }
 
   async function submitAudit(value = did) {
@@ -247,7 +308,7 @@ export default function Home() {
             </span>
             <span>
               <span className="block text-sm font-semibold tracking-tight text-white">Technocore Trust Lens</span>
-              <span className="block text-[10px] font-medium uppercase tracking-[0.16em] text-slate-500">public provenance explorer</span>
+              <span className="block text-[10px] font-medium uppercase tracking-[0.16em] text-slate-500">public conversation map</span>
             </span>
           </a>
 
@@ -268,22 +329,25 @@ export default function Home() {
               Read-only · no key custody · no reward claims
             </p>
             <h1 className="max-w-3xl text-balance text-4xl font-semibold leading-[1.03] tracking-[-0.055em] text-white sm:text-6xl">
-              See the signal.<br />
-              Keep the provenance.
+              Read the room.<br />
+              Keep the evidence.
             </h1>
             <p className="mt-6 max-w-2xl text-pretty text-base leading-7 text-slate-300 sm:text-lg">
-              A safety-first window into public Technocore activity. Inspect a DID’s expected registry slot,
-              distinguish signed records from self-asserted names, and keep untrusted room content in its lane.
+              A safety-first window into public Technocore activity. Map recurring language and repeated templates,
+              then inspect the signature and DID evidence behind what you are seeing.
             </p>
             <div className="mt-8 flex flex-wrap gap-3 text-sm">
-              <a href="#audit" className="rounded-full bg-cyan-300 px-5 py-3 font-semibold text-slate-950 transition hover:bg-cyan-200">
-                Inspect a public DID
+              <a href="#conversation-map" className="rounded-full bg-cyan-300 px-5 py-3 font-semibold text-slate-950 transition hover:bg-cyan-200">
+                Map a public room
+              </a>
+              <a href="#audit" className="rounded-full border border-white/15 px-5 py-3 font-semibold text-slate-200 transition hover:border-white/35 hover:bg-white/[0.04]">
+                Verify a public DID
               </a>
               <a
                 href="https://technocore.chat/auth.md"
                 target="_blank"
                 rel="noreferrer"
-                className="rounded-full border border-white/15 px-5 py-3 font-semibold text-slate-200 transition hover:border-white/35 hover:bg-white/[0.04]"
+                className="rounded-full px-5 py-3 font-semibold text-slate-400 transition hover:text-cyan-200"
               >
                 Read the protocol
               </a>
@@ -327,6 +391,157 @@ export default function Home() {
               <StatCard label="Reply signal" value={network ? percent(network.engagement.zero_response_share === null ? null : 1 - network.engagement.zero_response_share) : '…'} detail="Different-writer responses in the sample" />
             </div>
           )}
+        </section>
+
+        <section id="conversation-map" aria-labelledby="conversation-map-heading" className="py-12">
+          <div className="rounded-3xl border border-cyan-300/20 bg-cyan-300/[0.055] p-5 sm:p-7">
+            <div className="grid gap-8 xl:grid-cols-[minmax(0,1.1fr)_minmax(340px,0.9fr)] xl:items-end">
+              <div>
+                <p className="font-mono text-[10px] font-semibold uppercase tracking-[0.18em] text-cyan-200">Primary tool</p>
+                <h2 id="conversation-map-heading" className="mt-2 text-2xl font-semibold tracking-tight text-white">Conversation Map</h2>
+                <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-300">
+                  Turn the latest public room sample into a readable snapshot of recurring language, repeated text,
+                  signatures, and questions. It is a map of the current sample—not a verdict on people or ideas.
+                </p>
+              </div>
+
+              <form onSubmit={(event) => void submitConversationMap(event)} className="flex gap-2">
+                <label htmlFor="conversation-room" className="sr-only">Public room name</label>
+                <input
+                  id="conversation-room"
+                  value={roomName}
+                  onChange={(event) => setRoomName(event.target.value)}
+                  placeholder="lobby"
+                  spellCheck="false"
+                  className="min-w-0 flex-1 rounded-xl border border-white/15 bg-slate-950/70 px-3 py-3 font-mono text-sm text-white outline-none placeholder:text-slate-600 focus:border-cyan-300 focus:ring-2 focus:ring-cyan-300/20"
+                />
+                <button
+                  type="submit"
+                  disabled={isMapping}
+                  className="shrink-0 rounded-xl bg-cyan-300 px-4 py-3 text-sm font-semibold text-slate-950 transition hover:bg-cyan-200 disabled:cursor-wait disabled:opacity-70"
+                >
+                  {isMapping ? 'Mapping…' : 'Map 200 messages'}
+                </button>
+              </form>
+            </div>
+
+            <p className="mt-4 text-xs leading-5 text-slate-500">
+              One public read only. URLs and DIDs are excluded from the language analysis; nothing in a room is followed or treated as an instruction.
+            </p>
+
+            {conversationError && <p role="alert" className="mt-5 rounded-2xl border border-rose-300/20 bg-rose-300/10 p-4 text-sm text-rose-100">{conversationError}</p>}
+
+            {conversationMap && (
+              <div className="mt-7 border-t border-white/10 pt-6">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+                  <div>
+                    <p className="font-mono text-xs text-cyan-100">#{conversationMap.room}</p>
+                    <p className="mt-1 text-sm text-slate-300">
+                      {conversationMap.sample.messages} retained messages · seq {conversationMap.sample.firstSeq ?? '—'}–{conversationMap.sample.lastSeq ?? '—'}
+                    </p>
+                  </div>
+                  <p className="text-xs text-slate-500">Mapped {formatTimestamp(conversationMap.sampledAt)}</p>
+                </div>
+
+                <div className="mt-5 rounded-2xl border border-white/10 bg-slate-950/60 p-4">
+                  <p className="font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-cyan-200">Plain-language read</p>
+                  <p className="mt-2 text-sm leading-6 text-slate-300">
+                    {conversationMap.terms.length > 0 ? (
+                      <>
+                        The terms appearing in the most messages are{' '}
+                        <span className="font-medium text-white">
+                          {conversationMap.terms.slice(0, 3).map((term, index) => `${index ? ', ' : ''}${term.term}`)}
+                        </span>
+                        .
+                      </>
+                    ) : (
+                      'No recurring terms were extracted from this sample.'
+                    )}{' '}
+                    {percent(share(conversationMap.repetition.repeatedMessageCount, conversationMap.sample.messages))} of shown messages share exact text, and{' '}
+                    {percent(share(conversationMap.participation.oneShotSignedMessageCount, conversationMap.participation.signedMessages))} of signed messages come from a DID seen once in this sample.
+                  </p>
+                </div>
+
+                <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+                  <StatCard
+                    label="Signed share"
+                    value={percent(share(conversationMap.participation.signedMessages, conversationMap.sample.messages))}
+                    detail={`${number.format(conversationMap.participation.signedMessages)} signed / ${number.format(conversationMap.participation.unsignedMessages)} self-asserted`}
+                  />
+                  <StatCard
+                    label="Exact repeats"
+                    value={percent(share(conversationMap.repetition.repeatedMessageCount, conversationMap.sample.messages))}
+                    detail="Messages whose exact text repeats"
+                  />
+                  <StatCard
+                    label="One-shot DID share"
+                    value={percent(share(conversationMap.participation.oneShotSignedMessageCount, conversationMap.participation.signedMessages))}
+                    detail="Signed messages from a key seen once"
+                  />
+                  <StatCard
+                    label="Distinct texts"
+                    value={number.format(conversationMap.repetition.distinctTexts)}
+                    detail="Different exact message bodies"
+                  />
+                  <StatCard
+                    label="Questions"
+                    value={number.format(conversationMap.questions)}
+                    detail="Messages containing a question mark"
+                  />
+                </div>
+
+                <div className="mt-6 grid gap-5 xl:grid-cols-[minmax(0,1.3fr)_minmax(280px,0.7fr)]">
+                  <section aria-labelledby="terms-heading" className="rounded-2xl border border-white/10 bg-slate-950/60 p-4 sm:p-5">
+                    <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+                      <div>
+                        <p className="font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-cyan-200">What is surfacing</p>
+                        <h3 id="terms-heading" className="mt-1 text-lg font-semibold text-white">Terms across the current sample</h3>
+                      </div>
+                      <p className="text-xs text-slate-500">Size = messages containing the term</p>
+                    </div>
+
+                    {conversationMap.terms.length > 0 ? (
+                      <ul aria-label="Most common terms" className="mt-5 flex flex-wrap items-baseline gap-x-4 gap-y-3">
+                        {conversationMap.terms.map((term) => (
+                          <li
+                            key={term.term}
+                            className="inline-flex items-baseline gap-1.5 text-cyan-100"
+                            style={{ fontSize: `${0.9 + (term.count / largestTermCount) * 1.05}rem` }}
+                          >
+                            <span>{term.term}</span>
+                            <span className="font-mono text-[10px] text-slate-500">{term.count}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="mt-5 text-sm text-slate-500">No recurring language could be extracted from this sample.</p>
+                    )}
+                  </section>
+
+                  <section aria-labelledby="phrases-heading" className="rounded-2xl border border-white/10 bg-slate-950/60 p-4 sm:p-5">
+                    <p className="font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-cyan-200">What repeats</p>
+                    <h3 id="phrases-heading" className="mt-1 text-lg font-semibold text-white">Repeated two-word phrases</h3>
+                    {conversationMap.repetition.repeatedPhrases.length > 0 ? (
+                      <ol className="mt-5 space-y-3">
+                        {conversationMap.repetition.repeatedPhrases.map((phrase) => (
+                          <li key={phrase.value} className="flex items-start justify-between gap-4 text-sm">
+                            <span className="text-slate-200">{phrase.value}</span>
+                            <span className="shrink-0 font-mono text-xs text-cyan-200">×{phrase.count}</span>
+                          </li>
+                        ))}
+                      </ol>
+                    ) : (
+                      <p className="mt-5 text-sm text-slate-500">No two-word phrase repeats in this sample.</p>
+                    )}
+                  </section>
+                </div>
+
+                <p className="mt-5 text-xs leading-5 text-slate-500">
+                  Sample range: {formatTimestamp(conversationMap.sample.firstTimestamp)} to {formatTimestamp(conversationMap.sample.lastTimestamp)}. Terms and phrases are untrusted public text, normalized and counted once per message.
+                </p>
+              </div>
+            )}
+          </div>
         </section>
 
         <section className="grid gap-8 py-12 xl:grid-cols-[minmax(0,1.15fr)_minmax(340px,0.85fr)]">
@@ -423,7 +638,10 @@ export default function Home() {
                   </div>
                   {audit.foundDid && (
                     <div className="flex items-start justify-between gap-4">
-                      <dt className="text-slate-500">First DID in note</dt><dd className="max-w-[60%] break-all text-right font-mono text-slate-200">{shortDid(audit.foundDid)}</dd>
+                      <dt className="text-slate-500">First DID in note</dt>
+                      <dd className="max-w-[60%] text-right">
+                        <CopyableDid value={audit.foundDid} className="inline-block max-w-full break-all font-mono text-slate-200" />
+                      </dd>
                     </div>
                   )}
                 </dl>
@@ -468,7 +686,11 @@ export default function Home() {
                   return (
                     <article key={message.seq} className="grid gap-3 px-4 py-4 sm:grid-cols-[minmax(150px,0.38fr)_minmax(0,1fr)] sm:gap-6">
                       <div>
-                        <p className="break-all font-mono text-xs text-slate-200">{signed ? shortDid(message.from) : `~${message.from}`}</p>
+                        {signed ? (
+                          <CopyableDid value={message.from} className="block break-all font-mono text-left text-xs text-slate-200" />
+                        ) : (
+                          <p className="break-all font-mono text-xs text-slate-200">~{message.from}</p>
+                        )}
                         <p className={`mt-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${signed ? 'text-cyan-200' : 'text-amber-200'}`}>
                           {signed ? 'signed key possession' : 'self-asserted name'}
                         </p>
@@ -487,6 +709,36 @@ export default function Home() {
           )}
         </section>
 
+        <section aria-labelledby="site-identity-heading" className="rounded-3xl border border-cyan-300/20 bg-cyan-300/[0.04] p-5 sm:p-6">
+          <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(360px,0.8fr)] lg:items-end">
+            <div>
+              <p className="font-mono text-[10px] font-semibold uppercase tracking-[0.18em] text-cyan-200">Published site identity</p>
+              <h2 id="site-identity-heading" className="mt-2 text-2xl font-semibold tracking-tight text-white">A public link to the person maintaining this lens.</h2>
+              <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-300">
+                This domain publishes a self-declared connection between its public DID and GitHub profile, so visitors can inspect the provenance without handing over a wallet or private key.
+              </p>
+            </div>
+
+            <dl className="grid gap-3 rounded-2xl border border-white/10 bg-slate-950/60 p-4 text-sm">
+              <div className="flex items-center justify-between gap-4">
+                <dt className="text-slate-500">Domain</dt>
+                <dd><a className="font-mono text-cyan-100 transition hover:text-cyan-200" href="https://technocorelens.xyz">technocorelens.xyz</a></dd>
+              </div>
+              <div className="flex items-center justify-between gap-4">
+                <dt className="text-slate-500">GitHub</dt>
+                <dd><a className="font-mono text-cyan-100 transition hover:text-cyan-200" href={SITE_GITHUB} target="_blank" rel="noreferrer">@0xjorgen</a></dd>
+              </div>
+              <div className="flex items-start justify-between gap-4">
+                <dt className="pt-0.5 text-slate-500">Public DID</dt>
+                <dd className="max-w-[65%] text-right"><CopyableDid value={SITE_DID} className="inline-block max-w-full break-all font-mono text-cyan-100" /></dd>
+              </div>
+            </dl>
+          </div>
+          <p className="mt-5 text-xs leading-5 text-slate-500">
+            This is a published claim of common control, not third-party identity verification, affiliation, or reward eligibility. <a className="text-cyan-200 transition hover:text-cyan-100" href="/.well-known/technocore-identity.json">Read the machine-readable record.</a>
+          </p>
+        </section>
+
         <footer className="flex flex-col gap-4 border-t border-white/10 pt-8 text-xs leading-5 text-slate-500 sm:flex-row sm:items-end sm:justify-between">
           <p className="max-w-2xl">Technocore Trust Lens is an independent, read-only project. It does not create keys, post messages, connect wallets, or determine any FLOP reward.</p>
           <div className="flex flex-wrap gap-x-4 gap-y-2">
@@ -497,6 +749,40 @@ export default function Home() {
         </footer>
       </div>
     </main>
+  );
+}
+
+function CopyableDid({ value, className }: { value: string; className: string }) {
+  const [copyStatus, setCopyStatus] = useState<'idle' | 'copied' | 'error'>('idle');
+
+  async function copyDid() {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopyStatus('copied');
+    } catch {
+      setCopyStatus('error');
+    }
+
+    window.setTimeout(() => setCopyStatus('idle'), 1800);
+  }
+
+  const label = copyStatus === 'copied' ? 'Full DID copied' : copyStatus === 'error' ? 'Copy failed' : shortDid(value);
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => void copyDid()}
+        title="Copy full DID"
+        aria-label="Copy full DID"
+        className={`${className} cursor-copy rounded decoration-dotted underline-offset-4 transition hover:text-cyan-200 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300`}
+      >
+        {label}
+      </button>
+      <span className="sr-only" aria-live="polite">
+        {copyStatus === 'copied' ? 'Full DID copied.' : copyStatus === 'error' ? 'Could not copy the full DID.' : ''}
+      </span>
+    </>
   );
 }
 
