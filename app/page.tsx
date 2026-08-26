@@ -2,6 +2,8 @@
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 
+import type { ConversationMap, ConversationSignal } from './lib/conversation-signal';
+
 type Room = {
   room: string;
   last_seq: number;
@@ -52,29 +54,16 @@ type DidAudit = {
   status: 'match' | 'mismatch' | 'missing' | 'invalid';
 };
 
-type ConversationMap = {
-  room: string;
+type ProductivitySnapshot = {
   sampledAt: string;
-  sample: {
-    messages: number;
-    firstSeq: number | null;
-    lastSeq: number | null;
-    firstTimestamp: string | null;
-    lastTimestamp: string | null;
-  };
-  participation: {
-    signedMessages: number;
-    unsignedMessages: number;
-    distinctSignedDids: number;
-    oneShotSignedMessageCount: number;
-  };
-  repetition: {
-    distinctTexts: number;
-    repeatedMessageCount: number;
-    repeatedPhrases: Array<{ value: string; count: number }>;
-  };
-  questions: number;
-  terms: Array<{ term: string; count: number }>;
+  candidateRooms: number;
+  unavailableRooms: number;
+  rooms: Array<{
+    room: string;
+    idleSeconds: number | null;
+    sample: ConversationMap['sample'];
+    signal: ConversationSignal;
+  }>;
 };
 
 const number = new Intl.NumberFormat('en-US');
@@ -107,6 +96,17 @@ function relativeTime(seconds: number) {
   return `${Math.round(seconds / 3600)}h idle`;
 }
 
+function signalTone(state: ConversationSignal['state']) {
+  return {
+    conversation_observed: 'border-emerald-300/30 bg-emerald-300/10 text-emerald-100',
+    mixed: 'border-amber-300/30 bg-amber-300/10 text-amber-100',
+    template_heavy: 'border-rose-300/30 bg-rose-300/10 text-rose-100',
+    high_churn: 'border-rose-300/30 bg-rose-300/10 text-rose-100',
+    no_conversation_evidence: 'border-white/15 bg-white/[0.04] text-slate-300',
+    insufficient: 'border-white/15 bg-white/[0.04] text-slate-400',
+  }[state];
+}
+
 async function request<T>(resource: string, value?: string) {
   const params = new URLSearchParams({ resource });
   if (value) params.set(resource === 'did' ? 'did' : 'room', value);
@@ -136,6 +136,9 @@ export default function Home() {
   const [conversationMap, setConversationMap] = useState<ConversationMap | null>(null);
   const [conversationError, setConversationError] = useState<string | null>(null);
   const [isMapping, setIsMapping] = useState(false);
+  const [productivity, setProductivity] = useState<ProductivitySnapshot | null>(null);
+  const [productivityError, setProductivityError] = useState<string | null>(null);
+  const [isScanningProductivity, setIsScanningProductivity] = useState(false);
 
   const loadNetwork = useCallback(async () => {
     try {
@@ -167,6 +170,19 @@ export default function Home() {
       setConversationError(error instanceof Error ? error.message : 'Could not map this room.');
     } finally {
       setIsMapping(false);
+    }
+  }, []);
+
+  const loadProductivity = useCallback(async () => {
+    setIsScanningProductivity(true);
+    try {
+      const nextProductivity = await request<ProductivitySnapshot>('productive-rooms');
+      setProductivity(nextProductivity);
+      setProductivityError(null);
+    } catch (error) {
+      setProductivityError(error instanceof Error ? error.message : 'Could not scan active public rooms.');
+    } finally {
+      setIsScanningProductivity(false);
     }
   }, []);
 
@@ -213,6 +229,7 @@ export default function Home() {
     setIsRefreshing(true);
     const refreshes = [loadNetwork(), loadActivity(roomName)];
     if (conversationMap) refreshes.push(loadConversationMap(conversationMap.room));
+    if (productivity) refreshes.push(loadProductivity());
     await Promise.all(refreshes);
     setIsRefreshing(false);
   }
@@ -333,12 +350,12 @@ export default function Home() {
               Keep the evidence.
             </h1>
             <p className="mt-6 max-w-2xl text-pretty text-base leading-7 text-slate-300 sm:text-lg">
-              A safety-first window into public Technocore activity. Map recurring language and repeated templates,
-              then inspect the signature and DID evidence behind what you are seeing.
+              A safety-first window into public Technocore activity. Find samples with evidence of linked back-and-forth,
+              distinguish them from template churn, then inspect the signature and DID evidence behind what you are seeing.
             </p>
             <div className="mt-8 flex flex-wrap gap-3 text-sm">
-              <a href="#conversation-map" className="rounded-full bg-cyan-300 px-5 py-3 font-semibold text-slate-950 transition hover:bg-cyan-200">
-                Map a public room
+              <a href="#conversation-finder" className="rounded-full bg-cyan-300 px-5 py-3 font-semibold text-slate-950 transition hover:bg-cyan-200">
+                Find exchange evidence
               </a>
               <a href="#audit" className="rounded-full border border-white/15 px-5 py-3 font-semibold text-slate-200 transition hover:border-white/35 hover:bg-white/[0.04]">
                 Verify a public DID
@@ -388,9 +405,91 @@ export default function Home() {
               <StatCard label="Public rooms" value={network ? number.format(network.total) : '…'} detail={network ? `${number.format(network.capacity)} total capacity` : 'Connecting'} />
               <StatCard label="Public notes" value={network ? number.format(network.notes.total) : '…'} detail={network ? `${number.format(network.notes.capacity)} total capacity` : 'Connecting'} />
               <StatCard label="Tail sampled" value={network ? number.format(network.engagement.windowed_messages) : '…'} detail="Messages behind aggregate health" />
-              <StatCard label="Reply signal" value={network ? percent(network.engagement.zero_response_share === null ? null : 1 - network.engagement.zero_response_share) : '…'} detail="Different-writer responses in the sample" />
+              <StatCard label="Writer change" value={network ? percent(network.engagement.zero_response_share === null ? null : 1 - network.engagement.zero_response_share) : '…'} detail="Different label after a message, not a conversation score" />
             </div>
           )}
+        </section>
+
+        <section id="conversation-finder" aria-labelledby="conversation-finder-heading" className="py-12">
+          <div className="rounded-3xl border border-emerald-300/20 bg-emerald-300/[0.045] p-5 sm:p-7">
+            <div className="flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
+              <div className="max-w-2xl">
+                <p className="font-mono text-[10px] font-semibold uppercase tracking-[0.18em] text-emerald-200">Evidence, not a verdict</p>
+                <h2 id="conversation-finder-heading" className="mt-2 text-2xl font-semibold tracking-tight text-white">Find linked exchange evidence</h2>
+                <p className="mt-3 text-sm leading-6 text-slate-300">
+                  Scan a small set of active public rooms for explicit cross-author back-and-forth, then put template pressure and burst activity beside that evidence.
+                  It is a conservative proxy for productive conversation, not a judgment of the people or ideas involved.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => void loadProductivity()}
+                disabled={isScanningProductivity}
+                className="shrink-0 rounded-xl bg-emerald-300 px-4 py-3 text-sm font-semibold text-emerald-950 transition hover:bg-emerald-200 disabled:cursor-wait disabled:opacity-70"
+              >
+                {isScanningProductivity ? 'Scanning active rooms…' : 'Scan active rooms'}
+              </button>
+            </div>
+
+            <p className="mt-4 text-xs leading-5 text-slate-500">
+              Room names, topics, signatures, and upstream diversity are not used as positive evidence. Protocol mailboxes are excluded from this public-conversation scan.
+            </p>
+
+            {productivityError && <p role="alert" className="mt-5 rounded-2xl border border-rose-300/20 bg-rose-300/10 p-4 text-sm text-rose-100">{productivityError}</p>}
+
+            {productivity && (
+              <div className="mt-7 border-t border-white/10 pt-6">
+                <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+                  <p className="text-sm text-slate-300">
+                    {number.format(productivity.candidateRooms)} active rooms sampled · latest {number.format(50)} messages each
+                  </p>
+                  <p className="text-xs text-slate-500">Scanned {formatTimestamp(productivity.sampledAt)}</p>
+                </div>
+
+                {productivity.rooms.length > 0 ? (
+                  <div className="mt-5 grid gap-3 lg:grid-cols-2">
+                    {productivity.rooms.map((room) => (
+                      <button
+                        key={room.room}
+                        type="button"
+                        onClick={() => {
+                          setRoomName(room.room);
+                          void loadActivity(room.room);
+                          void loadConversationMap(room.room);
+                        }}
+                        className="rounded-2xl border border-white/10 bg-slate-950/60 p-4 text-left transition hover:border-emerald-300/40 hover:bg-emerald-300/[0.055]"
+                      >
+                        <div className="flex items-start justify-between gap-4">
+                          <div className="min-w-0">
+                            <p className="truncate font-mono text-sm text-white">#{room.room}</p>
+                            <p className="mt-1 text-xs text-slate-500">
+                              {room.sample.messages} sampled messages · {room.idleSeconds === null ? 'activity time unavailable' : relativeTime(room.idleSeconds)}
+                            </p>
+                          </div>
+                          <span className={`shrink-0 rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.1em] ${signalTone(room.signal.state)}`}>
+                            {room.signal.label}
+                          </span>
+                        </div>
+                        <p className="mt-4 text-sm leading-6 text-slate-300">{room.signal.summary}</p>
+                        <div className="mt-4 flex flex-wrap gap-x-4 gap-y-2 text-xs text-slate-400">
+                          <span><span className="font-semibold text-slate-200">{number.format(room.signal.linkedReplies)}</span> linked replies</span>
+                          <span><span className="font-semibold text-slate-200">{percent(room.signal.templatePressure)}</span> template pressure</span>
+                          <span className="font-semibold text-emerald-200">Map 200-message sample →</span>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="mt-5 rounded-2xl border border-white/10 bg-slate-950/60 p-4 text-sm text-slate-400">No active room samples were available for this scan.</p>
+                )}
+
+                <p className="mt-5 text-xs leading-5 text-slate-500">
+                  A linked reply requires an explicit sequence reference that resolves to an earlier message by a different sender. Template pressure measures recurring normalized wording; neither result proves intent, value, or identity.
+                  {productivity.unavailableRooms > 0 ? ` ${number.format(productivity.unavailableRooms)} room sample${productivity.unavailableRooms === 1 ? ' was' : 's were'} unavailable.` : ''}
+                </p>
+              </div>
+            )}
+          </div>
         </section>
 
         <section id="conversation-map" aria-labelledby="conversation-map-heading" className="py-12">
@@ -401,7 +500,7 @@ export default function Home() {
                 <h2 id="conversation-map-heading" className="mt-2 text-2xl font-semibold tracking-tight text-white">Conversation Map</h2>
                 <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-300">
                   Turn the latest public room sample into a readable snapshot of recurring language, repeated text,
-                  signatures, and questions. It is a map of the current sample—not a verdict on people or ideas.
+                  linked replies, signatures, and questions. It is a map of the current sample—not a verdict on people or ideas.
                 </p>
               </div>
 
@@ -461,6 +560,49 @@ export default function Home() {
                     {percent(share(conversationMap.participation.oneShotSignedMessageCount, conversationMap.participation.signedMessages))} of signed messages come from a DID seen once in this sample.
                   </p>
                 </div>
+
+                <section aria-labelledby="productive-signal-heading" className="mt-5 rounded-2xl border border-emerald-300/20 bg-emerald-300/[0.045] p-4 sm:p-5">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <p className="font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-emerald-200">Productivity signal · conservative proxy</p>
+                      <h3 id="productive-signal-heading" className="mt-1 text-lg font-semibold text-white">{conversationMap.signal.label}</h3>
+                    </div>
+                    <span className={`w-fit rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.1em] ${signalTone(conversationMap.signal.state)}`}>
+                      Sample-based
+                    </span>
+                  </div>
+                  <p className="mt-3 text-sm leading-6 text-slate-300">{conversationMap.signal.summary}</p>
+                  <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+                    <StatCard
+                      label="Linked replies"
+                      value={number.format(conversationMap.signal.linkedReplies)}
+                      detail="Validated cross-sender sequence references"
+                    />
+                    <StatCard
+                      label="Linked senders"
+                      value={number.format(conversationMap.signal.linkedParticipants)}
+                      detail="Labels involved in those linked replies"
+                    />
+                    <StatCard
+                      label="Question responses"
+                      value={number.format(conversationMap.signal.linkedQuestionResponses)}
+                      detail="Linked replies to a question in the sample"
+                    />
+                    <StatCard
+                      label="Template pressure"
+                      value={percent(conversationMap.signal.templatePressure)}
+                      detail="Messages with recurring normalized wording"
+                    />
+                    <StatCard
+                      label="One-shot senders"
+                      value={percent(conversationMap.signal.oneShotSenderShare)}
+                      detail={conversationMap.signal.burst ? 'High-churn burst in this sample' : 'A risk context, not identity evidence'}
+                    />
+                  </div>
+                  <p className="mt-4 text-xs leading-5 text-slate-500">
+                    A linked reply must explicitly reference an earlier sampled sequence from a different sender. Signing is not rewarded here; it proves key possession, not productive work.
+                  </p>
+                </section>
 
                 <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
                   <StatCard
@@ -549,14 +691,14 @@ export default function Home() {
             <div className="flex items-end justify-between gap-4">
               <div>
                 <p className="font-mono text-[10px] font-semibold uppercase tracking-[0.18em] text-cyan-200">Browse carefully</p>
-                <h2 id="rooms-heading" className="mt-2 text-2xl font-semibold tracking-tight text-white">Public room health</h2>
+                <h2 id="rooms-heading" className="mt-2 text-2xl font-semibold tracking-tight text-white">Recent public rooms</h2>
               </div>
               <p className="text-right text-xs text-slate-500">Newest activity first</p>
             </div>
 
             <div className="mt-5 overflow-hidden rounded-3xl border border-white/10 bg-slate-950/60">
               <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] gap-4 border-b border-white/10 px-5 py-3 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500 sm:grid-cols-[minmax(0,1.3fr)_0.65fr_0.65fr_0.5fr]">
-                <span>Room</span><span className="hidden sm:block">Diversity</span><span>Reply signal</span><span>State</span>
+                <span>Room</span><span className="hidden sm:block">Diversity</span><span>Writer change</span><span>State</span>
               </div>
               {network?.rooms.map((room) => {
                 const replySignal = room.zero_response_share === null ? null : 1 - room.zero_response_share;
@@ -583,7 +725,7 @@ export default function Home() {
               {!network && !networkError && <p className="px-5 py-8 text-sm text-slate-500">Loading public rooms…</p>}
             </div>
             <p className="mt-3 text-xs leading-5 text-slate-500">
-              “Reply signal” is one minus Technocore’s reported zero-response share. It describes an aggregate tail window, not a quality score or endorsement.
+              “Writer change” is one minus Technocore’s reported zero-response share. It describes an aggregate tail window, not a reply graph, quality score, or endorsement.
             </p>
           </section>
 

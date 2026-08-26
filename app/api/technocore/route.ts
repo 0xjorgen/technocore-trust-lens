@@ -1,7 +1,14 @@
+import { asPublicMessage, buildConversationMap, type PublicMessage } from '../../lib/conversation-signal';
+
 const TECHNOCORE_ORIGIN = 'https://technocore.chat';
 const ROOM_NAME = /^[a-z0-9][a-z0-9_-]{0,47}$/;
 const DID = /^did:key:z6Mk[1-9A-HJ-NP-Za-km-z]{44}$/;
 const DID_IN_NOTE = /did:key:z[1-9A-HJ-NP-Za-km-z]+/;
+const PRODUCTIVITY_CANDIDATE_LIMIT = 12;
+const PRODUCTIVITY_DISCOVERY_LIMIT = 48;
+const PRODUCTIVITY_MESSAGE_LIMIT = 50;
+const PRODUCTIVITY_CACHE_SECONDS = 30;
+const TECHNOCORE_TIMEOUT_MS = 8000;
 
 type DidAudit = {
   did: string;
@@ -13,25 +20,22 @@ type DidAudit = {
   status: 'match' | 'mismatch' | 'missing' | 'invalid';
 };
 
-type PublicMessage = {
-  seq: number;
-  ts: string;
-  from: string;
-  text: string;
+type RoomCandidate = {
+  room: string;
+  idleSeconds: number | null;
+  windowSize: number;
 };
 
-const STOP_WORDS = new Set([
-  'about', 'after', 'again', 'also', 'and', 'are', 'around', 'back', 'been', 'being', 'but', 'can', 'could',
-  'did', 'does', 'dont', 'for', 'from', 'get', 'got', 'had', 'has', 'have', 'here', 'how', 'into', 'its', 'just',
-  'like', 'more', 'not', 'now', 'one', 'our', 'out', 'really', 'same', 'some', 'that', 'the', 'their', 'them',
-  'then', 'there', 'they', 'this', 'those', 'through', 'today', 'too', 'use', 'was', 'way', 'were', 'what', 'when',
-  'where', 'which', 'who', 'will', 'with', 'would', 'you', 'your', 'youre', 'yourself', 'https', 'http', 'www',
-]);
+type ProductivitySnapshot = Awaited<ReturnType<typeof scanProductiveRooms>>;
+
+let cachedProductivity: { expiresAt: number; snapshot: ProductivitySnapshot } | null = null;
+let pendingProductivityScan: Promise<ProductivitySnapshot> | null = null;
 
 async function technocore(path: string) {
   return fetch(`${TECHNOCORE_ORIGIN}${path}`, {
     cache: 'no-store',
     headers: { Accept: 'application/json, text/plain;q=0.9' },
+    signal: AbortSignal.timeout(TECHNOCORE_TIMEOUT_MS),
   });
 }
 
@@ -85,102 +89,102 @@ async function auditDid(did: string): Promise<DidAudit> {
   };
 }
 
-function asPublicMessage(value: unknown): PublicMessage | null {
+function asRoomCandidate(value: unknown): RoomCandidate | null {
   if (!value || typeof value !== 'object') return null;
 
-  const message = value as Record<string, unknown>;
-  if (
-    typeof message.seq !== 'number'
-    || typeof message.ts !== 'string'
-    || typeof message.from !== 'string'
-    || typeof message.text !== 'string'
-  ) {
-    return null;
-  }
-
-  return { seq: message.seq, ts: message.ts, from: message.from, text: message.text };
-}
-
-function analysisWords(text: string) {
-  return text
-    .replace(/https?:\/\/\S+/giu, ' ')
-    .replace(/did:key:z[1-9A-HJ-NP-Za-km-z]+/gu, ' ')
-    .toLocaleLowerCase()
-    .match(/[\p{L}\p{N}][\p{L}\p{N}'-]*/gu)
-    ?.filter((word) => word.length > 2 && !STOP_WORDS.has(word) && !/^\d+$/u.test(word)) ?? [];
-}
-
-function rankedEntries(entries: Map<string, number>, limit: number, minimum = 1) {
-  return [...entries.entries()]
-    .filter(([, count]) => count >= minimum)
-    .sort(([left, leftCount], [right, rightCount]) => rightCount - leftCount || left.localeCompare(right))
-    .slice(0, limit)
-    .map(([value, count]) => ({ value, count }));
-}
-
-function buildConversationMap(room: string, messages: PublicMessage[]) {
-  const signedMessages = messages.filter((message) => message.from.startsWith('did:key:'));
-  const authorCounts = new Map<string, number>();
-  const textCounts = new Map<string, number>();
-  const termCounts = new Map<string, number>();
-  const phraseCounts = new Map<string, number>();
-
-  for (const message of signedMessages) {
-    authorCounts.set(message.from, (authorCounts.get(message.from) ?? 0) + 1);
-  }
-
-  for (const message of messages) {
-    const normalizedText = message.text.trim();
-    textCounts.set(normalizedText, (textCounts.get(normalizedText) ?? 0) + 1);
-
-    const words = analysisWords(message.text);
-    for (const word of new Set(words)) {
-      termCounts.set(word, (termCounts.get(word) ?? 0) + 1);
-    }
-
-    const phrasesInMessage = new Set<string>();
-    for (let index = 0; index < words.length - 1; index += 1) {
-      phrasesInMessage.add(`${words[index]} ${words[index + 1]}`);
-    }
-    for (const phrase of phrasesInMessage) {
-      phraseCounts.set(phrase, (phraseCounts.get(phrase) ?? 0) + 1);
-    }
-  }
-
-  const orderedMessages = [...messages].sort((left, right) => left.seq - right.seq);
-  const repeatedMessageCount = [...textCounts.values()].reduce(
-    (total, count) => total + (count > 1 ? count : 0),
-    0,
-  );
-  const oneShotSignedMessageCount = [...authorCounts.values()].reduce(
-    (total, count) => total + (count === 1 ? 1 : 0),
-    0,
-  );
+  const room = value as Record<string, unknown>;
+  if (typeof room.room !== 'string' || !ROOM_NAME.test(room.room)) return null;
 
   return {
-    room,
-    sampledAt: new Date().toISOString(),
-    sample: {
-      messages: messages.length,
-      firstSeq: orderedMessages[0]?.seq ?? null,
-      lastSeq: orderedMessages.at(-1)?.seq ?? null,
-      firstTimestamp: orderedMessages[0]?.ts ?? null,
-      lastTimestamp: orderedMessages.at(-1)?.ts ?? null,
-    },
-    participation: {
-      signedMessages: signedMessages.length,
-      unsignedMessages: messages.length - signedMessages.length,
-      distinctSignedDids: authorCounts.size,
-      oneShotSignedMessageCount,
-    },
-    repetition: {
-      distinctTexts: textCounts.size,
-      repeatedMessageCount,
-      repeatedPhrases: rankedEntries(phraseCounts, 6, 2),
-    },
-    questions: messages.filter((message) => message.text.includes('?')).length,
-    terms: rankedEntries(termCounts, 18).map(({ value, count }) => ({ term: value, count })),
+    room: room.room,
+    idleSeconds: typeof room.idle_seconds === 'number' && Number.isFinite(room.idle_seconds)
+      ? room.idle_seconds
+      : null,
+    windowSize: typeof room.window === 'number' && Number.isFinite(room.window) ? room.window : 0,
   };
+}
+
+function signalRank(signal: ReturnType<typeof buildConversationMap>['signal']) {
+  if (signal.state === 'conversation_observed') return 4;
+  if (signal.state === 'mixed') {
+    const highRisk = signal.templatePressure !== null && signal.templatePressure >= 0.5
+      || (signal.burst && signal.oneShotSenderShare !== null && signal.oneShotSenderShare >= 0.7);
+    return highRisk ? 1 : 3;
+  }
+  if (signal.state === 'no_conversation_evidence') return 2;
+  if (signal.state === 'insufficient') return 0;
+  return 1;
+}
+
+async function scanProductiveRooms() {
+  const response = await technocore(`/rooms?format=json&limit=${PRODUCTIVITY_DISCOVERY_LIMIT}`);
+  if (!response.ok) throw new Error(`Technocore returned ${response.status} while discovering active rooms.`);
+
+  const payload = await response.json() as { rooms?: unknown };
+  const candidates = (Array.isArray(payload.rooms) ? payload.rooms : [])
+    .map(asRoomCandidate)
+    .filter((room): room is RoomCandidate => room !== null)
+    .filter((room) => room.room !== 'events' && !room.room.startsWith('mb-'))
+    .filter((room) => room.windowSize >= 8)
+    .slice(0, PRODUCTIVITY_CANDIDATE_LIMIT);
+  const scanned = await Promise.all(candidates.map(async (room) => {
+    try {
+      const roomResponse = await technocore(`/r/${encodeURIComponent(room.room)}?format=json&limit=${PRODUCTIVITY_MESSAGE_LIMIT}`);
+      if (!roomResponse.ok) return null;
+
+      const roomPayload = await roomResponse.json() as { messages?: unknown };
+      const messages = Array.isArray(roomPayload.messages)
+        ? roomPayload.messages.map(asPublicMessage).filter((message): message is PublicMessage => message !== null)
+        : [];
+      const map = buildConversationMap(room.room, messages);
+
+      return {
+        room: room.room,
+        idleSeconds: room.idleSeconds,
+        sample: map.sample,
+        signal: map.signal,
+      };
+    } catch {
+      return null;
+    }
+  }));
+  const rooms = scanned
+    .filter((room): room is NonNullable<typeof room> => room !== null)
+    .sort((left, right) => (
+      signalRank(right.signal) - signalRank(left.signal)
+      || right.signal.linkedReplies - left.signal.linkedReplies
+      || (left.signal.templatePressure ?? 1) - (right.signal.templatePressure ?? 1)
+      || (left.idleSeconds ?? Number.POSITIVE_INFINITY) - (right.idleSeconds ?? Number.POSITIVE_INFINITY)
+    ));
+
+  return {
+    sampledAt: new Date().toISOString(),
+    candidateRooms: candidates.length,
+    unavailableRooms: candidates.length - rooms.length,
+    rooms,
+  };
+}
+
+async function productiveRooms() {
+  if (cachedProductivity && cachedProductivity.expiresAt > Date.now()) {
+    return cachedProductivity.snapshot;
+  }
+
+  if (!pendingProductivityScan) {
+    pendingProductivityScan = scanProductiveRooms()
+      .then((snapshot) => {
+        cachedProductivity = {
+          snapshot,
+          expiresAt: Date.now() + PRODUCTIVITY_CACHE_SECONDS * 1000,
+        };
+        return snapshot;
+      })
+      .finally(() => {
+        pendingProductivityScan = null;
+      });
+  }
+
+  return pendingProductivityScan;
 }
 
 export async function GET(request: Request) {
@@ -192,6 +196,12 @@ export async function GET(request: Request) {
       const response = await technocore('/rooms?format=json&limit=6');
       if (!response.ok) return error(`Technocore returned ${response.status} while loading rooms.`, 502);
       return Response.json(await response.json(), { headers: { 'Cache-Control': 'no-store' } });
+    }
+
+    if (resource === 'productive-rooms') {
+      return Response.json(await productiveRooms(), {
+        headers: { 'Cache-Control': `public, max-age=${PRODUCTIVITY_CACHE_SECONDS}, s-maxage=${PRODUCTIVITY_CACHE_SECONDS}` },
+      });
     }
 
     if (resource === 'room') {
@@ -226,7 +236,7 @@ export async function GET(request: Request) {
       return Response.json(await auditDid(did), { headers: { 'Cache-Control': 'no-store' } });
     }
 
-    return error('Choose rooms, room, conversation, or did.');
+    return error('Choose rooms, productive-rooms, room, conversation, or did.');
   } catch (cause) {
     const message = cause instanceof Error ? cause.message : 'Technocore is temporarily unavailable.';
     return error(message, 502);
