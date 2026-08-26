@@ -74,6 +74,7 @@ export default function Home() {
   const [roomError, setRoomError] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isInspecting, setIsInspecting] = useState(false);
+  const [isDecisionOpen, setIsDecisionOpen] = useState(false);
 
   const loadRankings = useCallback(async () => {
     setIsRefreshing(true);
@@ -90,8 +91,10 @@ export default function Home() {
   }, []);
 
   const inspectRoom = useCallback(async (room: string) => {
+    setIsDecisionOpen(true);
     setIsInspecting(true);
     setRoomError(null);
+    setSelectedRoom(null);
     try {
       const assessment = await request<JoinAssessment>('room', room);
       setSelectedRoom(assessment);
@@ -107,6 +110,17 @@ export default function Home() {
     const initialLoad = window.setTimeout(() => void loadRankings(), 0);
     return () => window.clearTimeout(initialLoad);
   }, [loadRankings]);
+
+  useEffect(() => {
+    if (!isDecisionOpen) return;
+
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === 'Escape') setIsDecisionOpen(false);
+    }
+
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [isDecisionOpen]);
 
   function submitRoom(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -180,7 +194,6 @@ export default function Home() {
                 {isInspecting ? 'Checking…' : 'Should I join?'}
               </button>
             </form>
-            {roomError && <p role="alert" className="mt-3 text-sm text-rose-200">{roomError}</p>}
           </div>
 
           <aside className="rounded-3xl border border-white/10 bg-slate-950/75 p-5 shadow-2xl shadow-black/20 backdrop-blur sm:p-6">
@@ -248,59 +261,6 @@ export default function Home() {
           )}
         </section>
 
-        <section id="decision" aria-labelledby="decision-heading" className="py-12">
-          <div className="rounded-3xl border border-cyan-300/20 bg-cyan-300/[0.055] p-5 sm:p-7">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-              <div>
-                <p className="font-mono text-[10px] font-semibold uppercase tracking-[0.18em] text-cyan-200">Join decision</p>
-                <h2 id="decision-heading" className="mt-2 text-2xl font-semibold tracking-tight text-white">
-                  {selectedRoom ? '#' + selectedRoom.room : 'Pick a room to inspect'}
-                </h2>
-              </div>
-              {selectedRoom && <p className="text-xs text-slate-500">{selectedRoom.sample.messages} messages · updated {updatedAt(selectedRoom.sampledAt)}</p>}
-            </div>
-
-            {selectedRoom ? (
-              <div className="mt-7 grid gap-7 lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
-                <div className="rounded-2xl border border-white/10 bg-slate-950/65 p-5">
-                  <p className="font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-cyan-200">Starting signal</p>
-                  <div className="mt-4 flex items-end justify-between gap-5">
-                    <div>
-                      <p className="text-5xl font-semibold tracking-[-0.06em] text-white">{selectedRoom.score}</p>
-                      <p className="mt-2 text-lg font-semibold text-cyan-100">{selectedRoom.recommendation}</p>
-                    </div>
-                    <p className="max-w-44 text-right text-xs leading-5 text-slate-500">A room-sample heuristic, not a quality or people score.</p>
-                  </div>
-                  <p className="mt-5 text-sm leading-6 text-slate-300">{selectedRoom.summary}</p>
-                  <dl className="mt-6 grid gap-3 border-t border-white/10 pt-5 text-sm sm:grid-cols-2">
-                    <div><dt className="text-slate-500">Conversation read</dt><dd className="mt-1 font-medium text-white">{selectedRoom.signal.label}</dd></div>
-                    <div><dt className="text-slate-500">Recent activity</dt><dd className="mt-1 font-medium text-white">{relativeTime(selectedRoom.idleSeconds)}</dd></div>
-                  </dl>
-                </div>
-
-                <div className="space-y-4">
-                  {selectedRoom.factors.map((factor) => (
-                    <article key={factor.label} className="rounded-2xl border border-white/10 bg-slate-950/45 p-4">
-                      <div className="flex items-baseline justify-between gap-4">
-                        <h3 className="text-sm font-semibold text-white">{factor.label}</h3>
-                        <p className="font-mono text-sm text-cyan-100">{factor.value}/{factor.max}</p>
-                      </div>
-                      <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-white/10">
-                        <div className="h-full rounded-full bg-cyan-300" style={{ width: Math.round((factor.value / factor.max) * 100) + '%' }} />
-                      </div>
-                      <p className="mt-3 text-xs leading-5 text-slate-400">{factor.detail}</p>
-                    </article>
-                  ))}
-                </div>
-              </div>
-            ) : (
-              <div className="mt-6 rounded-2xl border border-white/10 bg-slate-950/50 p-5 text-sm leading-6 text-slate-400">
-                Choose a ranked room or enter any public room name. Lens will show the room-specific signals behind its recommendation.
-              </div>
-            )}
-          </div>
-        </section>
-
         <section aria-labelledby="heuristics-heading" className="grid gap-5 py-4 lg:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]">
           <div className="rounded-3xl border border-lime-300/20 bg-lime-300/[0.045] p-5 sm:p-7">
             <p className="font-mono text-[10px] font-semibold uppercase tracking-[0.18em] text-lime-200">Heuristics v0.1</p>
@@ -340,6 +300,78 @@ export default function Home() {
           <a className="transition hover:text-cyan-200" href="https://technocore.chat/llms.txt" target="_blank" rel="noreferrer">Technocore API</a>
         </footer>
       </div>
+
+      {isDecisionOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-end bg-slate-950/80 p-3 backdrop-blur-sm sm:items-center sm:justify-center sm:p-6"
+          onMouseDown={() => setIsDecisionOpen(false)}
+        >
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="decision-heading"
+            className="max-h-[90vh] w-full max-w-4xl overflow-y-auto rounded-3xl border border-cyan-300/30 bg-[#0a1728] p-5 shadow-2xl shadow-black/50 sm:p-7"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-5">
+              <div>
+                <p className="font-mono text-[10px] font-semibold uppercase tracking-[0.18em] text-cyan-200">Join decision</p>
+                <h2 id="decision-heading" className="mt-2 text-2xl font-semibold tracking-tight text-white">
+                  {selectedRoom ? '#' + selectedRoom.room : isInspecting ? 'Checking this room…' : 'Could not inspect this room'}
+                </h2>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsDecisionOpen(false)}
+                className="rounded-full border border-white/15 px-3 py-1.5 text-sm font-semibold text-slate-300 transition hover:border-cyan-300/50 hover:text-white"
+              >
+                Close
+              </button>
+            </div>
+
+            {selectedRoom ? (
+              <div className="mt-7 grid gap-7 lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
+                <div className="rounded-2xl border border-white/10 bg-slate-950/65 p-5">
+                  <p className="font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-cyan-200">Starting signal</p>
+                  <div className="mt-4 flex items-end justify-between gap-5">
+                    <div>
+                      <p className="text-5xl font-semibold tracking-[-0.06em] text-white">{selectedRoom.score}</p>
+                      <p className="mt-2 text-lg font-semibold text-cyan-100">{selectedRoom.recommendation}</p>
+                    </div>
+                    <p className="max-w-44 text-right text-xs leading-5 text-slate-500">A room-sample heuristic, not a quality or people score.</p>
+                  </div>
+                  <p className="mt-5 text-sm leading-6 text-slate-300">{selectedRoom.summary}</p>
+                  <dl className="mt-6 grid gap-3 border-t border-white/10 pt-5 text-sm sm:grid-cols-2">
+                    <div><dt className="text-slate-500">Conversation read</dt><dd className="mt-1 font-medium text-white">{selectedRoom.signal.label}</dd></div>
+                    <div><dt className="text-slate-500">Recent activity</dt><dd className="mt-1 font-medium text-white">{relativeTime(selectedRoom.idleSeconds)}</dd></div>
+                    <div><dt className="text-slate-500">Sample</dt><dd className="mt-1 font-medium text-white">{selectedRoom.sample.messages} messages</dd></div>
+                    <div><dt className="text-slate-500">Updated</dt><dd className="mt-1 font-medium text-white">{updatedAt(selectedRoom.sampledAt)}</dd></div>
+                  </dl>
+                </div>
+
+                <div className="space-y-4">
+                  {selectedRoom.factors.map((factor) => (
+                    <article key={factor.label} className="rounded-2xl border border-white/10 bg-slate-950/45 p-4">
+                      <div className="flex items-baseline justify-between gap-4">
+                        <h3 className="text-sm font-semibold text-white">{factor.label}</h3>
+                        <p className="font-mono text-sm text-cyan-100">{factor.value}/{factor.max}</p>
+                      </div>
+                      <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-white/10">
+                        <div className="h-full rounded-full bg-cyan-300" style={{ width: Math.round((factor.value / factor.max) * 100) + '%' }} />
+                      </div>
+                      <p className="mt-3 text-xs leading-5 text-slate-400">{factor.detail}</p>
+                    </article>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div className="mt-7 rounded-2xl border border-white/10 bg-slate-950/50 p-5 text-sm leading-6 text-slate-300">
+                {isInspecting ? 'Lens is reading the public room signals now.' : roomError || 'No room decision is available right now.'}
+              </div>
+            )}
+          </section>
+        </div>
+      )}
     </main>
   );
 }
