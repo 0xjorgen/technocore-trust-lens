@@ -16,17 +16,17 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   metadataBase: new URL(siteUrl),
-  title: 'Technocore Trust Lens',
-  description: 'A read-only conversation map and provenance explorer for public Technocore rooms and DID notes.',
+  title: 'Technocore Lens — Should I join this room?',
+  description: 'A read-only guide to public Technocore rooms, ranked with transparent conversation signals.',
   openGraph: {
-    title: 'Technocore Trust Lens',
-    description: 'A read-only conversation map and provenance explorer for public Technocore rooms and DID notes.',
-    images: [{ url: `${siteUrl}/og.png`, width: 1200, height: 630, alt: 'Technocore Trust Lens — Public conversation map' }],
+    title: 'Technocore Lens — Should I join this room?',
+    description: 'A read-only guide to public Technocore rooms, ranked with transparent conversation signals.',
+    images: [{ url: `${siteUrl}/og.png`, width: 1200, height: 630, alt: 'Technocore Lens — room decisions with transparent signals' }],
   },
   twitter: {
     card: 'summary_large_image',
-    title: 'Technocore Trust Lens',
-    description: 'A read-only conversation map and provenance explorer for public Technocore rooms and DID notes.',
+    title: 'Technocore Lens — Should I join this room?',
+    description: 'A read-only guide to public Technocore rooms, ranked with transparent conversation signals.',
     images: [`${siteUrl}/og.png`],
   },
 };

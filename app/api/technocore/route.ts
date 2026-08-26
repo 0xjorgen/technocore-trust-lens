@@ -1,24 +1,12 @@
-import { asPublicMessage, buildConversationMap, type PublicMessage } from '../../lib/conversation-signal';
+import { asPublicMessage, buildConversationMap, type ConversationMap, type PublicMessage } from '../../lib/conversation-signal';
 
 const TECHNOCORE_ORIGIN = 'https://technocore.chat';
 const ROOM_NAME = /^[a-z0-9][a-z0-9_-]{0,47}$/;
-const DID = /^did:key:z6Mk[1-9A-HJ-NP-Za-km-z]{44}$/;
-const DID_IN_NOTE = /did:key:z[1-9A-HJ-NP-Za-km-z]+/;
-const PRODUCTIVITY_CANDIDATE_LIMIT = 12;
-const PRODUCTIVITY_DISCOVERY_LIMIT = 48;
-const PRODUCTIVITY_MESSAGE_LIMIT = 50;
-const PRODUCTIVITY_CACHE_SECONDS = 30;
-const TECHNOCORE_TIMEOUT_MS = 8000;
-
-type DidAudit = {
-  did: string;
-  fingerprint: string;
-  expectedPath: string;
-  source: 'sharded' | 'legacy' | null;
-  note: string | null;
-  foundDid: string | null;
-  status: 'match' | 'mismatch' | 'missing' | 'invalid';
-};
+const DISCOVERY_LIMIT = 64;
+const CANDIDATE_LIMIT = 16;
+const MESSAGE_LIMIT = 80;
+const CACHE_SECONDS = 30;
+const TIMEOUT_MS = 8000;
 
 type RoomCandidate = {
   room: string;
@@ -26,67 +14,44 @@ type RoomCandidate = {
   windowSize: number;
 };
 
-type ProductivitySnapshot = Awaited<ReturnType<typeof scanProductiveRooms>>;
+type JoinAssessment = {
+  room: string;
+  score: number;
+  recommendation: string;
+  summary: string;
+  sampledAt: string;
+  idleSeconds: number | null;
+  sample: ConversationMap['sample'];
+  signal: ConversationMap['signal'];
+  factors: Array<{
+    label: string;
+    value: number;
+    max: number;
+    detail: string;
+  }>;
+};
 
-let cachedProductivity: { expiresAt: number; snapshot: ProductivitySnapshot } | null = null;
-let pendingProductivityScan: Promise<ProductivitySnapshot> | null = null;
+type Rankings = {
+  sampledAt: string;
+  candidateRooms: number;
+  unavailableRooms: number;
+  heuristicVersion: string;
+  rooms: JoinAssessment[];
+};
+
+let cachedRankings: { expiresAt: number; snapshot: Rankings } | null = null;
+let pendingRankings: Promise<Rankings> | null = null;
 
 async function technocore(path: string) {
-  return fetch(`${TECHNOCORE_ORIGIN}${path}`, {
+  return fetch(TECHNOCORE_ORIGIN + path, {
     cache: 'no-store',
     headers: { Accept: 'application/json, text/plain;q=0.9' },
-    signal: AbortSignal.timeout(TECHNOCORE_TIMEOUT_MS),
+    signal: AbortSignal.timeout(TIMEOUT_MS),
   });
-}
-
-async function sha256(value: string) {
-  const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
-  return Array.from(new Uint8Array(hash), (byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
 function error(message: string, status = 400) {
   return Response.json({ error: message }, { status });
-}
-
-async function readPublicNote(path: string) {
-  const response = await technocore(path);
-  if (response.status === 404) return null;
-  if (!response.ok) throw new Error(`Technocore returned ${response.status} while reading a public note.`);
-  return response.text();
-}
-
-async function auditDid(did: string): Promise<DidAudit> {
-  if (!DID.test(did)) {
-    return {
-      did,
-      fingerprint: '',
-      expectedPath: '—',
-      source: null,
-      note: null,
-      foundDid: null,
-      status: 'invalid',
-    };
-  }
-
-  const fingerprint = (await sha256(did)).slice(0, 16);
-  const shard = fingerprint.slice(0, 2);
-  const key = fingerprint.slice(2);
-  const expectedPath = `/kv/did-${shard}/${key}`;
-  const shardedNote = await readPublicNote(expectedPath);
-  const legacyNote = shardedNote === null ? await readPublicNote(`/kv/did/${fingerprint}`) : null;
-  const note = shardedNote ?? legacyNote;
-  const source = shardedNote === null ? (legacyNote === null ? null : 'legacy') : 'sharded';
-  const foundDid = note?.match(DID_IN_NOTE)?.[0] ?? null;
-
-  return {
-    did,
-    fingerprint,
-    expectedPath,
-    source,
-    note,
-    foundDid,
-    status: note === null ? 'missing' : foundDid === did ? 'match' : 'mismatch',
-  };
 }
 
 function asRoomCandidate(value: unknown): RoomCandidate | null {
@@ -104,21 +69,88 @@ function asRoomCandidate(value: unknown): RoomCandidate | null {
   };
 }
 
-function signalRank(signal: ReturnType<typeof buildConversationMap>['signal']) {
-  if (signal.state === 'conversation_observed') return 4;
-  if (signal.state === 'mixed') {
-    const highRisk = signal.templatePressure !== null && signal.templatePressure >= 0.5
-      || (signal.burst && signal.oneShotSenderShare !== null && signal.oneShotSenderShare >= 0.7);
-    return highRisk ? 1 : 3;
-  }
-  if (signal.state === 'no_conversation_evidence') return 2;
-  if (signal.state === 'insufficient') return 0;
-  return 1;
+function roomAssessment(room: string, idleSeconds: number | null, messages: PublicMessage[]): JoinAssessment {
+  const map = buildConversationMap(room, messages);
+  const distinctParticipants = new Set(messages.map((message) => message.from)).size;
+  const publicPointers = messages.filter((message) => /https?:\/\/\S+/u.test(message.text)).length;
+  const continuity = Math.min(35, map.signal.linkedReplies * 10 + map.signal.linkedQuestionResponses * 5);
+  const pointers = Math.min(20, publicPointers * 5);
+  const participation = Math.min(15, distinctParticipants * 3);
+  const freshness = idleSeconds === null ? 7 : idleSeconds < 300 ? 15 : idleSeconds < 3600 ? 10 : idleSeconds < 86400 ? 5 : 1;
+  const patternClarity = map.signal.templatePressure === null
+    ? 7
+    : Math.round((1 - map.signal.templatePressure) * 15);
+  const score = continuity + pointers + participation + freshness + patternClarity;
+  const recommendation = score >= 70
+    ? 'Strong room to explore'
+    : score >= 45
+      ? 'Worth a closer look'
+      : score >= 25
+        ? 'Browse before joining'
+        : 'Wait for clearer signal';
+
+  return {
+    room,
+    score,
+    recommendation,
+    summary: score >= 45
+      ? 'Recent activity shows enough visible follow-through to inspect the room with intent.'
+      : 'The sampled activity does not yet show enough transparent follow-through for a confident join decision.',
+    sampledAt: map.sampledAt,
+    idleSeconds,
+    sample: map.sample,
+    signal: map.signal,
+    factors: [
+      {
+        label: 'Conversation continuity',
+        value: continuity,
+        max: 35,
+        detail: 'Explicit cross-participant references and responses to questions in the sampled window.',
+      },
+      {
+        label: 'Public pointers',
+        value: pointers,
+        max: 20,
+        detail: 'Messages containing public URLs. These are pointers to inspect, not proof of quality.',
+      },
+      {
+        label: 'Participation context',
+        value: participation,
+        max: 15,
+        detail: 'Distinct senders in the sample. This is context, never an identity or credibility judgment.',
+      },
+      {
+        label: 'Freshness',
+        value: freshness,
+        max: 15,
+        detail: 'How recently the room reported activity.',
+      },
+      {
+        label: 'Pattern clarity',
+        value: patternClarity,
+        max: 15,
+        detail: 'Lower recurring-template pressure leaves more room to inspect the discussion itself.',
+      },
+    ],
+  };
 }
 
-async function scanProductiveRooms() {
-  const response = await technocore(`/rooms?format=json&limit=${PRODUCTIVITY_DISCOVERY_LIMIT}`);
-  if (!response.ok) throw new Error(`Technocore returned ${response.status} while discovering active rooms.`);
+async function inspectRoom(room: string, idleSeconds: number | null) {
+  const response = await technocore('/r/' + encodeURIComponent(room) + '?format=json&limit=' + MESSAGE_LIMIT);
+  if (response.status === 404) throw new Error('That public room was not found.');
+  if (!response.ok) throw new Error('Technocore returned ' + response.status + ' while reading this room.');
+
+  const payload = await response.json() as { messages?: unknown };
+  const messages = Array.isArray(payload.messages)
+    ? payload.messages.map(asPublicMessage).filter((message): message is PublicMessage => message !== null)
+    : [];
+
+  return roomAssessment(room, idleSeconds, messages);
+}
+
+async function scanRankings(): Promise<Rankings> {
+  const response = await technocore('/rooms?format=json&limit=' + DISCOVERY_LIMIT);
+  if (!response.ok) throw new Error('Technocore returned ' + response.status + ' while discovering rooms.');
 
   const payload = await response.json() as { rooms?: unknown };
   const candidates = (Array.isArray(payload.rooms) ? payload.rooms : [])
@@ -126,65 +158,42 @@ async function scanProductiveRooms() {
     .filter((room): room is RoomCandidate => room !== null)
     .filter((room) => room.room !== 'events' && !room.room.startsWith('mb-'))
     .filter((room) => room.windowSize >= 8)
-    .slice(0, PRODUCTIVITY_CANDIDATE_LIMIT);
-  const scanned = await Promise.all(candidates.map(async (room) => {
+    .slice(0, CANDIDATE_LIMIT);
+  const inspected = await Promise.all(candidates.map(async (room) => {
     try {
-      const roomResponse = await technocore(`/r/${encodeURIComponent(room.room)}?format=json&limit=${PRODUCTIVITY_MESSAGE_LIMIT}`);
-      if (!roomResponse.ok) return null;
-
-      const roomPayload = await roomResponse.json() as { messages?: unknown };
-      const messages = Array.isArray(roomPayload.messages)
-        ? roomPayload.messages.map(asPublicMessage).filter((message): message is PublicMessage => message !== null)
-        : [];
-      const map = buildConversationMap(room.room, messages);
-
-      return {
-        room: room.room,
-        idleSeconds: room.idleSeconds,
-        sample: map.sample,
-        signal: map.signal,
-      };
+      return await inspectRoom(room.room, room.idleSeconds);
     } catch {
       return null;
     }
   }));
-  const rooms = scanned
-    .filter((room): room is NonNullable<typeof room> => room !== null)
-    .sort((left, right) => (
-      signalRank(right.signal) - signalRank(left.signal)
-      || right.signal.linkedReplies - left.signal.linkedReplies
-      || (left.signal.templatePressure ?? 1) - (right.signal.templatePressure ?? 1)
-      || (left.idleSeconds ?? Number.POSITIVE_INFINITY) - (right.idleSeconds ?? Number.POSITIVE_INFINITY)
-    ));
+  const rooms = inspected
+    .filter((room): room is JoinAssessment => room !== null)
+    .sort((left, right) => right.score - left.score || (left.idleSeconds ?? Infinity) - (right.idleSeconds ?? Infinity));
 
   return {
     sampledAt: new Date().toISOString(),
     candidateRooms: candidates.length,
     unavailableRooms: candidates.length - rooms.length,
+    heuristicVersion: '0.1',
     rooms,
   };
 }
 
-async function productiveRooms() {
-  if (cachedProductivity && cachedProductivity.expiresAt > Date.now()) {
-    return cachedProductivity.snapshot;
-  }
+async function rankings() {
+  if (cachedRankings && cachedRankings.expiresAt > Date.now()) return cachedRankings.snapshot;
 
-  if (!pendingProductivityScan) {
-    pendingProductivityScan = scanProductiveRooms()
+  if (!pendingRankings) {
+    pendingRankings = scanRankings()
       .then((snapshot) => {
-        cachedProductivity = {
-          snapshot,
-          expiresAt: Date.now() + PRODUCTIVITY_CACHE_SECONDS * 1000,
-        };
+        cachedRankings = { snapshot, expiresAt: Date.now() + CACHE_SECONDS * 1000 };
         return snapshot;
       })
       .finally(() => {
-        pendingProductivityScan = null;
+        pendingRankings = null;
       });
   }
 
-  return pendingProductivityScan;
+  return pendingRankings;
 }
 
 export async function GET(request: Request) {
@@ -192,51 +201,19 @@ export async function GET(request: Request) {
   const resource = searchParams.get('resource');
 
   try {
-    if (resource === 'rooms') {
-      const response = await technocore('/rooms?format=json&limit=6');
-      if (!response.ok) return error(`Technocore returned ${response.status} while loading rooms.`, 502);
-      return Response.json(await response.json(), { headers: { 'Cache-Control': 'no-store' } });
-    }
-
-    if (resource === 'productive-rooms') {
-      return Response.json(await productiveRooms(), {
-        headers: { 'Cache-Control': `public, max-age=${PRODUCTIVITY_CACHE_SECONDS}, s-maxage=${PRODUCTIVITY_CACHE_SECONDS}` },
+    if (resource === 'rankings') {
+      return Response.json(await rankings(), {
+        headers: { 'Cache-Control': 'public, max-age=' + CACHE_SECONDS + ', s-maxage=' + CACHE_SECONDS },
       });
     }
 
     if (resource === 'room') {
       const room = searchParams.get('room')?.trim() ?? '';
       if (!ROOM_NAME.test(room)) return error('Room names use lowercase letters, numbers, hyphens, and underscores only.');
-
-      const response = await technocore(`/r/${encodeURIComponent(room)}?format=json&limit=8`);
-      if (response.status === 404) return error('That public room was not found.', 404);
-      if (!response.ok) return error(`Technocore returned ${response.status} while loading this room.`, 502);
-      return Response.json(await response.json(), { headers: { 'Cache-Control': 'no-store' } });
+      return Response.json(await inspectRoom(room, null), { headers: { 'Cache-Control': 'no-store' } });
     }
 
-    if (resource === 'conversation') {
-      const room = searchParams.get('room')?.trim() ?? '';
-      if (!ROOM_NAME.test(room)) return error('Room names use lowercase letters, numbers, hyphens, and underscores only.');
-
-      const response = await technocore(`/r/${encodeURIComponent(room)}?format=json&limit=200`);
-      if (response.status === 404) return error('That public room was not found.', 404);
-      if (!response.ok) return error(`Technocore returned ${response.status} while loading this room.`, 502);
-
-      const payload = await response.json() as { messages?: unknown };
-      const messages = Array.isArray(payload.messages)
-        ? payload.messages.map(asPublicMessage).filter((message): message is PublicMessage => message !== null)
-        : [];
-
-      return Response.json(buildConversationMap(room, messages), { headers: { 'Cache-Control': 'no-store' } });
-    }
-
-    if (resource === 'did') {
-      const did = searchParams.get('did')?.trim() ?? '';
-      if (!did) return error('A public did:key is required.');
-      return Response.json(await auditDid(did), { headers: { 'Cache-Control': 'no-store' } });
-    }
-
-    return error('Choose rooms, productive-rooms, room, conversation, or did.');
+    return error('Choose rankings or room.');
   } catch (cause) {
     const message = cause instanceof Error ? cause.message : 'Technocore is temporarily unavailable.';
     return error(message, 502);
