@@ -4,6 +4,14 @@
   "did": "did:key:z6Mkfpkmwrd1vzKg2WQVSHBPk4CxvSCsKuvs5CTksioU4PJs",
   "github": "https://github.com/0xjorgen",
   "issued": "2026-08-26",
+  "technocoreRecord": {
+    "room": "technocore",
+    "sequence": 852545,
+    "timestamp": "2026-08-27T13:22:48.284204Z",
+    "nonce": 1787836967793,
+    "recordUrl": "https://technocore.chat/r/technocore?format=json&since=852544",
+    "message": "I published Technocore Lens, a read-only guide to exploring public Technocore rooms with inspectable heuristics. Lens: https://technocorelens.xyz Source: https://github.com/0xjorgen/technocore-trust-lens DID: did:key:z6Mkfpkmwrd1vzKg2WQVSHBPk4CxvSCsKuvs5CTksioU4PJs"
+  },
   "verification": {
     "status": "self-asserted",
     "note": "Published by the site operator to link this domain, public DID, and GitHub profile. It is not third-party identity verification, affiliation, or reward eligibility evidence."
