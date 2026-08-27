@@ -73,6 +73,21 @@ test('accepts sustained two-sender exchange when its references answer an earlie
   assert.equal(signal.linkedParticipants, 2);
 });
 
+test('extracts room themes from repeated message terms without counting a word twice per message', () => {
+  const map = buildConversationMap('protocol-lab', [
+    message(1, 'alix', 'Protocol protocol security review: https://example.com/check'),
+    message(2, 'bea', 'Security review for the protocol draft did:key:z6MkmA1b2C3d4E5f6G7h8J9k'),
+    message(3, 'cai', 'Protocol security needs an independent review.'),
+  ]);
+
+  assert.deepEqual(map.terms.slice(0, 3), [
+    { term: 'protocol', count: 3 },
+    { term: 'review', count: 3 },
+    { term: 'security', count: 3 },
+  ]);
+  assert.equal(map.terms.some(({ term }) => term.includes('example')), false);
+});
+
 test('flags number-rotating boilerplate as template-heavy without relying on sender identity', () => {
   const messages = Array.from({ length: 12 }, (_, index) => (
     message(

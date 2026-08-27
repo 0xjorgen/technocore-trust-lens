@@ -23,6 +23,7 @@ type JoinAssessment = {
   idleSeconds: number | null;
   sample: ConversationMap['sample'];
   signal: ConversationMap['signal'];
+  themes: ConversationMap['terms'];
   factors: Array<{
     label: string;
     value: number;
@@ -36,6 +37,7 @@ type Rankings = {
   candidateRooms: number;
   unavailableRooms: number;
   heuristicVersion: string;
+  themes: Array<{ term: string; rooms: number }>;
   rooms: JoinAssessment[];
 };
 
@@ -100,6 +102,7 @@ function roomAssessment(room: string, idleSeconds: number | null, messages: Publ
     idleSeconds,
     sample: map.sample,
     signal: map.signal,
+    themes: map.terms.slice(0, 6),
     factors: [
       {
         label: 'Conversation continuity',
@@ -169,12 +172,24 @@ async function scanRankings(): Promise<Rankings> {
   const rooms = inspected
     .filter((room): room is JoinAssessment => room !== null)
     .sort((left, right) => right.score - left.score || (left.idleSeconds ?? Infinity) - (right.idleSeconds ?? Infinity));
+  const themeRooms = new Map<string, number>();
+  for (const room of rooms) {
+    for (const term of new Set(room.themes.map((theme) => theme.term))) {
+      themeRooms.set(term, (themeRooms.get(term) ?? 0) + 1);
+    }
+  }
+  const themes = [...themeRooms.entries()]
+    .filter(([, roomCount]) => roomCount >= 2)
+    .sort(([left, leftCount], [right, rightCount]) => rightCount - leftCount || left.localeCompare(right))
+    .slice(0, 8)
+    .map(([term, rooms]) => ({ term, rooms }));
 
   return {
     sampledAt: new Date().toISOString(),
     candidateRooms: candidates.length,
     unavailableRooms: candidates.length - rooms.length,
     heuristicVersion: '0.1',
+    themes,
     rooms,
   };
 }

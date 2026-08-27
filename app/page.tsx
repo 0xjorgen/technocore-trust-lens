@@ -18,9 +18,11 @@ type JoinAssessment = {
   };
   signal: {
     label: string;
+    summary: string;
     linkedReplies: number;
     templatePressure: number | null;
   };
+  themes: Array<{ term: string; count: number }>;
   factors: Array<{
     label: string;
     value: number;
@@ -34,6 +36,7 @@ type Rankings = {
   candidateRooms: number;
   unavailableRooms: number;
   heuristicVersion: string;
+  themes: Array<{ term: string; rooms: number }>;
   rooms: JoinAssessment[];
 };
 
@@ -240,6 +243,13 @@ export default function Home() {
                       </div>
                       <p className="mt-4 text-sm font-medium text-slate-200">{room.recommendation}</p>
                       <p className="mt-1 text-sm leading-6 text-slate-400">{room.summary}</p>
+                      {room.themes.length > 0 && (
+                        <div className="mt-4 flex flex-wrap gap-1.5" aria-label={'Sample themes: ' + room.themes.map((theme) => theme.term).join(', ')}>
+                          {room.themes.slice(0, 3).map((theme) => (
+                            <span key={theme.term} className="rounded-full border border-cyan-200/15 bg-cyan-200/[0.06] px-2 py-1 text-[11px] text-cyan-100">{theme.term}</span>
+                          ))}
+                        </div>
+                      )}
                       <div className="mt-4 flex flex-wrap gap-x-4 gap-y-2 text-xs text-slate-500">
                         <span>{room.signal.linkedReplies} linked replies</span>
                         <span>{percent(room.signal.templatePressure)} template pressure</span>
@@ -253,6 +263,22 @@ export default function Home() {
               {rankings?.rooms.length === 0 && <p className="col-span-full rounded-2xl border border-white/10 bg-slate-950/60 p-5 text-sm text-slate-400">No public room samples are available right now.</p>}
             </div>
           )}
+          {rankings?.themes.length ? (
+            <aside className="mt-6 rounded-2xl border border-cyan-200/15 bg-cyan-200/[0.045] p-5 sm:flex sm:items-start sm:justify-between sm:gap-8">
+              <div>
+                <p className="font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-cyan-200">Across sampled rooms</p>
+                <h3 className="mt-2 text-lg font-semibold text-white">Themes appearing in more than one room</h3>
+                <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-400">Each term counts once per room, so one busy room cannot dominate the picture. These are pointers into public samples, not room labels.</p>
+              </div>
+              <div className="mt-4 flex max-w-md flex-wrap gap-2 sm:mt-0 sm:justify-end">
+                {rankings.themes.map((theme) => (
+                  <span key={theme.term} className="rounded-full border border-cyan-200/20 bg-slate-950/50 px-2.5 py-1.5 text-xs text-cyan-100">
+                    {theme.term} <span className="text-slate-500">· {theme.rooms} rooms</span>
+                  </span>
+                ))}
+              </div>
+            </aside>
+          ) : null}
           {rankings && (
             <p className="mt-4 text-xs leading-5 text-slate-500">
               Sampled {number.format(rankings.candidateRooms)} active rooms at {updatedAt(rankings.sampledAt)}.
@@ -347,9 +373,26 @@ export default function Home() {
                     <div><dt className="text-slate-500">Sample</dt><dd className="mt-1 font-medium text-white">{selectedRoom.sample.messages} messages</dd></div>
                     <div><dt className="text-slate-500">Updated</dt><dd className="mt-1 font-medium text-white">{updatedAt(selectedRoom.sampledAt)}</dd></div>
                   </dl>
+                  <div className="mt-6 border-t border-white/10 pt-5">
+                    <p className="font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-cyan-200">Sample themes</p>
+                    <p className="mt-2 text-xs leading-5 text-slate-400">Frequent terms in this public sample. They are prompts to inspect the underlying discussion, not a room classification.</p>
+                    {selectedRoom.themes.length > 0 ? (
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {selectedRoom.themes.map((theme) => (
+                          <span key={theme.term} className="rounded-full border border-cyan-200/20 bg-cyan-200/[0.06] px-2.5 py-1.5 text-xs text-cyan-100">{theme.term} <span className="text-slate-500">· {theme.count}</span></span>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="mt-3 text-sm text-slate-500">No recurring terms appeared in this sample.</p>
+                    )}
+                  </div>
                 </div>
 
                 <div className="space-y-4">
+                  <article className="rounded-2xl border border-white/10 bg-slate-950/45 p-4">
+                    <h3 className="text-sm font-semibold text-white">Conversation snapshot</h3>
+                    <p className="mt-2 text-xs leading-5 text-slate-400">{selectedRoom.signal.summary}</p>
+                  </article>
                   {selectedRoom.factors.map((factor) => (
                     <article key={factor.label} className="rounded-2xl border border-white/10 bg-slate-950/45 p-4">
                       <div className="flex items-baseline justify-between gap-4">
