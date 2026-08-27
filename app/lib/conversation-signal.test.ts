@@ -36,6 +36,29 @@ test('observes a sustained cross-author conversation only when sequence referenc
   assert.equal(signal.linkedParticipants, 3);
 });
 
+test('traces a linked claim through a public evidence pointer and later follow-up', () => {
+  const messages = [
+    message(1, 'alix', 'Can you make the room guide show why this recommendation is useful?'),
+    message(2, 'bea', 'Re #1: I added the audit trail. Evidence: https://example.com/change'),
+    message(3, 'cai', 'Re #2: I reviewed the trail and will use it for the next room decision.'),
+    message(4, 'alix', 'That makes the recommendation easier to inspect.'),
+    message(5, 'bea', 'The room sample remains public.'),
+    message(6, 'cai', 'I will compare the next recommendation.'),
+    message(7, 'alix', 'Please keep the confidence label visible.'),
+    message(8, 'bea', 'The missing-data note is useful too.'),
+  ];
+
+  const trail = buildConversationMap('audit-trail', messages).signal.trail;
+
+  assert.deepEqual(trail, {
+    claimSequence: 1,
+    evidenceSequence: 2,
+    outcomeSequence: 3,
+    confidence: 'high',
+    missing: [],
+  });
+});
+
 test('does not treat an unlinked question followed by unrelated activity as a reply', () => {
   const messages = [
     message(1, 'alix', 'Can someone review the draft?'),

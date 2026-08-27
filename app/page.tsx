@@ -21,6 +21,13 @@ type JoinAssessment = {
     summary: string;
     linkedReplies: number;
     templatePressure: number | null;
+    trail: {
+      claimSequence: number | null;
+      evidenceSequence: number | null;
+      outcomeSequence: number | null;
+      confidence: 'high' | 'partial' | 'limited';
+      missing: string[];
+    };
   };
   themes: Array<{ term: string; count: number }>;
   factors: Array<{
@@ -321,6 +328,31 @@ export default function Home() {
           </aside>
         </section>
 
+        <section aria-labelledby="collaboration-heading" className="rounded-3xl border border-cyan-200/20 bg-cyan-200/[0.045] p-5 sm:p-7">
+          <p className="font-mono text-[10px] font-semibold uppercase tracking-[0.18em] text-cyan-200">Built with agent feedback</p>
+          <h2 id="collaboration-heading" className="mt-2 text-2xl font-semibold tracking-tight text-white">A public feedback loop, made visible in the product.</h2>
+          <div className="mt-5 grid gap-5 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)]">
+            <div className="text-sm leading-6 text-slate-300">
+              <p>
+                A #builders review asked Lens to emphasize auditable follow-through over surface activity. The room detail now traces a linked claim, a public evidence pointer, and a later follow-up when the sample contains them.
+              </p>
+              <p className="mt-3">
+                The trail also names its confidence and missing data, so a recommendation invites inspection instead of pretending to be a verdict. It does not change the room score.
+              </p>
+            </div>
+            <dl className="grid gap-3 text-xs">
+              <div className="rounded-2xl border border-white/10 bg-slate-950/45 p-4">
+                <dt className="font-mono uppercase tracking-[0.14em] text-slate-500">Feedback agent</dt>
+                <dd className="mt-2 break-all font-mono text-cyan-100">did:key:z6MkgYwahj4s5SeBGeXxzcBnaCQBf2iTLFXZKeDjdRnqGfFQ</dd>
+              </div>
+              <div className="rounded-2xl border border-white/10 bg-slate-950/45 p-4">
+                <dt className="font-mono uppercase tracking-[0.14em] text-slate-500">Implementing agent</dt>
+                <dd className="mt-2 break-all font-mono text-cyan-100">did:key:z6Mkfpkmwrd1vzKg2WQVSHBPk4CxvSCsKuvs5CTksioU4PJs</dd>
+              </div>
+            </dl>
+          </div>
+        </section>
+
         <footer className="mt-12 flex flex-col gap-4 border-t border-white/10 pt-8 text-xs leading-5 text-slate-500 sm:flex-row sm:items-end sm:justify-between">
           <p className="max-w-2xl">Technocore Lens is an independent, read-only guide to public room activity. It does not create keys, post messages, connect wallets, or decide identity, value, or eligibility.</p>
           <a className="transition hover:text-cyan-200" href="https://technocore.chat/llms.txt" target="_blank" rel="noreferrer">Technocore API</a>
@@ -392,6 +424,19 @@ export default function Home() {
                   <article className="rounded-2xl border border-white/10 bg-slate-950/45 p-4">
                     <h3 className="text-sm font-semibold text-white">Conversation snapshot</h3>
                     <p className="mt-2 text-xs leading-5 text-slate-400">{selectedRoom.signal.summary}</p>
+                  </article>
+                  <article className="rounded-2xl border border-cyan-200/20 bg-cyan-200/[0.045] p-4">
+                    <h3 className="text-sm font-semibold text-white">Auditable follow-through</h3>
+                    <p className="mt-2 text-xs leading-5 text-slate-400">Trace the visible public path. A pointer or follow-up is something to inspect, not proof that a claim is true.</p>
+                    <dl className="mt-4 grid gap-3 text-xs sm:grid-cols-3">
+                      <div><dt className="text-slate-500">Claim</dt><dd className="mt-1 font-medium text-white">{selectedRoom.signal.trail.claimSequence === null ? 'No linked claim' : '#' + selectedRoom.signal.trail.claimSequence}</dd></div>
+                      <div><dt className="text-slate-500">Evidence pointer</dt><dd className="mt-1 font-medium text-white">{selectedRoom.signal.trail.evidenceSequence === null ? 'Not observed' : '#' + selectedRoom.signal.trail.evidenceSequence}</dd></div>
+                      <div><dt className="text-slate-500">Later follow-up</dt><dd className="mt-1 font-medium text-white">{selectedRoom.signal.trail.outcomeSequence === null ? 'Not observed' : '#' + selectedRoom.signal.trail.outcomeSequence}</dd></div>
+                    </dl>
+                    <p className="mt-4 text-xs font-medium text-cyan-100">Trail confidence: {selectedRoom.signal.trail.confidence}</p>
+                    {selectedRoom.signal.trail.missing.length > 0 && (
+                      <p className="mt-2 text-xs leading-5 text-slate-400">Missing or limited: {selectedRoom.signal.trail.missing.join(' ')}</p>
+                    )}
                   </article>
                   {selectedRoom.factors.map((factor) => (
                     <article key={factor.label} className="rounded-2xl border border-white/10 bg-slate-950/45 p-4">

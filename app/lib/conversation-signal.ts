@@ -13,6 +13,14 @@ export type ConversationSignalState =
   | 'no_conversation_evidence'
   | 'insufficient';
 
+export type FollowThroughTrail = {
+  claimSequence: number | null;
+  evidenceSequence: number | null;
+  outcomeSequence: number | null;
+  confidence: 'high' | 'partial' | 'limited';
+  missing: string[];
+};
+
 export type ConversationSignal = {
   state: ConversationSignalState;
   label: string;
@@ -24,6 +32,7 @@ export type ConversationSignal = {
   oneShotSenderShare: number | null;
   messagesPerMinute: number | null;
   burst: boolean;
+  trail: FollowThroughTrail;
 };
 
 export type ConversationMap = {
@@ -66,6 +75,12 @@ const LONG_IDENTIFIER = /\b(?:0x)?[0-9a-f]{8,}\b/giu;
 const NUMBER = /\b\d+(?:[._:-]\d+)*\b/gu;
 const REFERENCE = /\b(?:re|reply(?:ing)?\s+to)\s*#?\s*(\d+)\b/giu;
 const LEADING_REFERENCE = /^\s*(\d+)\s*:/u;
+const PUBLIC_POINTER = /https?:\/\/\S+/iu;
+
+type ReplyEdge = {
+  claimSequence: number;
+  responseSequence: number;
+};
 
 export function asPublicMessage(value: unknown): PublicMessage | null {
   if (!value || typeof value !== 'object') return null;
@@ -126,6 +141,64 @@ function referencedSequences(text: string) {
   return sequences;
 }
 
+function emptyFollowThroughTrail(): FollowThroughTrail {
+  return {
+    claimSequence: null,
+    evidenceSequence: null,
+    outcomeSequence: null,
+    confidence: 'limited',
+    missing: ['No cross-author reference connects a claim to a response in this sample.'],
+  };
+}
+
+function buildFollowThroughTrail(
+  messagesBySequence: Map<number, PublicMessage>,
+  edges: ReplyEdge[],
+  highRisk: boolean,
+): FollowThroughTrail {
+  if (edges.length === 0) return emptyFollowThroughTrail();
+
+  const repliesByClaim = new Map<number, ReplyEdge[]>();
+  for (const edge of edges) {
+    const replies = repliesByClaim.get(edge.claimSequence) ?? [];
+    replies.push(edge);
+    repliesByClaim.set(edge.claimSequence, replies);
+  }
+
+  const orderedEdges = [...edges].sort((left, right) => (
+    left.responseSequence - right.responseSequence || left.claimSequence - right.claimSequence
+  ));
+  let selectedEdge = orderedEdges[0];
+  let evidenceSequence: number | null = null;
+  let outcomeSequence: number | null = null;
+
+  for (const edge of orderedEdges) {
+    const candidates = [edge, ...(repliesByClaim.get(edge.responseSequence) ?? [])];
+    const evidence = candidates.find((candidate) => (
+      PUBLIC_POINTER.test(messagesBySequence.get(candidate.responseSequence)?.text ?? '')
+    ));
+    if (!evidence) continue;
+
+    selectedEdge = edge;
+    evidenceSequence = evidence.responseSequence;
+    outcomeSequence = repliesByClaim.get(evidence.responseSequence)?.[0]?.responseSequence ?? null;
+    break;
+  }
+
+  const missing: string[] = [];
+  if (evidenceSequence === null) missing.push('No public evidence pointer appeared in this linked trail.');
+  if (outcomeSequence === null) missing.push('No later linked follow-up appeared after the evidence pointer.');
+  if (highRisk) missing.push('Recurring templates or rapid churn make the visible trail less reliable.');
+
+  return {
+    claimSequence: selectedEdge.claimSequence,
+    evidenceSequence,
+    outcomeSequence,
+    confidence: highRisk ? 'limited' : evidenceSequence !== null && outcomeSequence !== null ? 'high' : 'partial',
+    missing,
+  };
+}
+
 function buildConversationSignal(messages: PublicMessage[]): ConversationSignal {
   const orderedMessages = [...messages].sort((left, right) => left.seq - right.seq);
   if (orderedMessages.length < 8) {
@@ -140,6 +213,7 @@ function buildConversationSignal(messages: PublicMessage[]): ConversationSignal 
       oneShotSenderShare: null,
       messagesPerMinute: null,
       burst: false,
+      trail: emptyFollowThroughTrail(),
     };
   }
 
@@ -147,6 +221,7 @@ function buildConversationSignal(messages: PublicMessage[]): ConversationSignal 
   const linkedReplySequences = new Set<number>();
   const linkedParticipants = new Set<string>();
   const linkedQuestionResponses = new Set<number>();
+  const replyEdges: ReplyEdge[] = [];
 
   for (const message of orderedMessages) {
     for (const sequence of referencedSequences(message.text)) {
@@ -156,6 +231,7 @@ function buildConversationSignal(messages: PublicMessage[]): ConversationSignal 
       linkedReplySequences.add(message.seq);
       linkedParticipants.add(message.from);
       linkedParticipants.add(referenced.from);
+      replyEdges.push({ claimSequence: referenced.seq, responseSequence: message.seq });
       if (referenced.text.includes('?')) linkedQuestionResponses.add(message.seq);
     }
   }
@@ -211,6 +287,7 @@ function buildConversationSignal(messages: PublicMessage[]): ConversationSignal 
   const linkedReplyCount = linkedReplySequences.size;
   const requiredLinks = orderedMessages.length < 50 ? 2 : 3;
   const requiredParticipants = 2;
+  const trail = buildFollowThroughTrail(messagesBySequence, replyEdges, highRisk);
 
   if (
     linkedReplyCount >= requiredLinks
@@ -229,6 +306,7 @@ function buildConversationSignal(messages: PublicMessage[]): ConversationSignal 
       oneShotSenderShare,
       messagesPerMinute,
       burst,
+      trail,
     };
   }
 
@@ -246,6 +324,7 @@ function buildConversationSignal(messages: PublicMessage[]): ConversationSignal 
       oneShotSenderShare,
       messagesPerMinute,
       burst,
+      trail,
     };
   }
 
@@ -263,6 +342,7 @@ function buildConversationSignal(messages: PublicMessage[]): ConversationSignal 
       oneShotSenderShare,
       messagesPerMinute,
       burst,
+      trail,
     };
   }
 
@@ -277,6 +357,7 @@ function buildConversationSignal(messages: PublicMessage[]): ConversationSignal 
     oneShotSenderShare,
     messagesPerMinute,
     burst,
+    trail,
   };
 }
 
