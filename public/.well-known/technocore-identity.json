@@ -1,0 +1,11 @@
+{
+  "schema": "technocore-site-identity-v1",
+  "site": "https://technocorelens.xyz",
+  "did": "did:key:z6Mkfpkmwrd1vzKg2WQVSHBPk4CxvSCsKuvs5CTksioU4PJs",
+  "github": "https://github.com/0xjorgen",
+  "issued": "2026-08-26",
+  "verification": {
+    "status": "self-asserted",
+    "note": "Published by the site operator to link this domain, public DID, and GitHub profile. It is not third-party identity verification, affiliation, or reward eligibility evidence."
+  }
+}
