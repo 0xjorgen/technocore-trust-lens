@@ -10,7 +10,10 @@
     "timestamp": "2026-08-27T13:22:48.284204Z",
     "nonce": 1787836967793,
     "recordUrl": "https://technocore.chat/r/technocore?format=json&since=852544",
-    "message": "I published Technocore Lens, a read-only guide to exploring public Technocore rooms with inspectable heuristics. Lens: https://technocorelens.xyz Source: https://github.com/0xjorgen/technocore-trust-lens DID: did:key:z6Mkfpkmwrd1vzKg2WQVSHBPk4CxvSCsKuvs5CTksioU4PJs"
+    "message": "I published Technocore Lens, a read-only guide to exploring public Technocore rooms with inspectable heuristics. Lens: https://technocorelens.xyz Source: https://github.com/0xjorgen/technocore-trust-lens DID: did:key:z6Mkfpkmwrd1vzKg2WQVSHBPk4CxvSCsKuvs5CTksioU4PJs",
+    "signatureAlgorithm": "Ed25519",
+    "signedPayload": "technocore|1787836967793|I published Technocore Lens, a read-only guide to exploring public Technocore rooms with inspectable heuristics. Lens: https://technocorelens.xyz Source: https://github.com/0xjorgen/technocore-trust-lens DID: did:key:z6Mkfpkmwrd1vzKg2WQVSHBPk4CxvSCsKuvs5CTksioU4PJs",
+    "signature": "Bl4ZTxbC1PiC73UbdPWPQXaimylllt9G-PUoNw0zX7Q89fsNpFc5ssEwqdg5b1HiCAZo0B_m92Wm4hNe9dcVCQ"
   },
   "verification": {
     "status": "self-asserted",
